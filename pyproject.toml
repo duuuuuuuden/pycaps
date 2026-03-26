@@ -45,6 +45,11 @@ fast = [
     "html2pic",
     "google-cloud-speech"
 ]
+base-minimal = [
+    "playwright",
+    "pywebview",
+    "html2pic"
+]
 base = [
     "openai-whisper",
     "playwright",
