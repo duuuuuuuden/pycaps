@@ -3,6 +3,7 @@ import os
 import tempfile
 from pycaps.common import Document, VideoQuality as PyCapsVideoQuality
 from pycaps.logger import logger
+from pycaps.video.video_normalizer import normalize_video_to_cfr_if_needed
 
 if TYPE_CHECKING:
     from movielite import VideoQuality, VideoWriter, VideoClip
@@ -12,6 +13,7 @@ class VideoGenerator:
         self._input_video_path: Optional[str] = None
         self._output_video_path: Optional[str] = None
         self._audio_path: Optional[str] = None
+        self._normalized_input_video_path: Optional[str] = None
 
         # State of video generation
         self._has_video_generation_started: bool = False
@@ -39,21 +41,29 @@ class VideoGenerator:
         if not os.path.exists(input_video_path):
             raise FileNotFoundError(f"Error: Input video file not found: {input_video_path}")
 
-        self._input_video_path = input_video_path
-        self._output_video_path = output_video_path
-        self._input_video_clip = VideoClip(input_video_path)
-        self._sanitize_fragment_time()
-        if self._fragment_time:
-            self._input_video_clip = self._input_video_clip.subclip(self._fragment_time[0], self._fragment_time[1])
+        try:
+            normalized_input = normalize_video_to_cfr_if_needed(input_video_path)
+            self._normalized_input_video_path = (
+                normalized_input.path if normalized_input.is_temporary else None
+            )
+            self._input_video_path = normalized_input.path
+            self._output_video_path = output_video_path
+            self._input_video_clip = VideoClip(normalized_input.path)
+            self._sanitize_fragment_time()
+            if self._fragment_time:
+                self._input_video_clip = self._input_video_clip.subclip(self._fragment_time[0], self._fragment_time[1])
 
-        self._video_writer: VideoWriter = VideoWriter(
-            self._output_video_path,
-            fps=self._input_video_clip.fps,
-            size=self._input_video_clip.size,
-            duration=self._input_video_clip.duration
-        )
-        self._audio_path = self._get_audio_path_to_transcribe()
-        self._has_video_generation_started = True
+            self._video_writer: VideoWriter = VideoWriter(
+                self._output_video_path,
+                fps=self._input_video_clip.fps,
+                size=self._input_video_clip.size,
+                duration=self._input_video_clip.duration
+            )
+            self._audio_path = self._get_audio_path_to_transcribe()
+            self._has_video_generation_started = True
+        except Exception:
+            self._remove_normalized_input_video_if_needed()
+            raise
     
     def _sanitize_fragment_time(self):
         if not self._fragment_time:
@@ -116,6 +126,7 @@ class VideoGenerator:
         
     def close(self):
         self._remove_audio_file_if_needed()
+        self._remove_normalized_input_video_if_needed()
         self._has_video_generation_started = False
 
     def _remove_audio_file_if_needed(self):
@@ -126,3 +137,13 @@ class VideoGenerator:
             logger().debug(f"Temporary audio file deleted: {self._audio_path}")
         except Exception as e:
             logger().warning(f"Error deleting temporary audio file {self._audio_path}: {e}")
+
+    def _remove_normalized_input_video_if_needed(self):
+        if not self._normalized_input_video_path:
+            return
+        try:
+            os.remove(self._normalized_input_video_path)
+            logger().debug(f"Temporary normalized video deleted: {self._normalized_input_video_path}")
+            self._normalized_input_video_path = None
+        except Exception as e:
+            logger().warning(f"Error deleting temporary normalized video {self._normalized_input_video_path}: {e}")
